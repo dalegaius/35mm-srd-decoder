@@ -119,4 +119,5 @@ during development. See `NOTICE.md`.
 
 ## Licence
 
-MIT, for the source code in this repository only. See `LICENSE` and `NOTICE.md`.
+**GNU GPL v3 or later**, for the source code in this repository only. Any version you build on must stay
+free software. See `LICENSE` and `NOTICE.md`.
