@@ -103,13 +103,6 @@ the film itself in module E3 to within half a least-significant bit.
 
 The format is described in **US patent 5,583,962** (Dolby Laboratories, 1992), now expired.
 
-## Surrounds
-
-The surround channels have about the right level and roughly the right spectral shape, but their
-waveform does not match what it should be. Shifting them by about 1100 samples improves things without
-explaining anything, so `--surround-delay 1100` is provided and left off by default. Ruled out so far:
-the steering flags (inactive on every block we examined) and the coupling master exponents (constant).
-If you know this format, we would like to hear from you.
 
 ## Credits
 
