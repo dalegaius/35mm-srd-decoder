@@ -1,4 +1,4 @@
-# srd-decoder
+# 36mm-srd-decoder
 
 An open decoder for **Dolby SR-D**, the 5.1 digital soundtrack printed between the perforations of
 35 mm release prints. It goes from photographs of the film to 5.1 audio, with no Dolby hardware in the
