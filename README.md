@@ -10,7 +10,6 @@ This is research code, not a finished product. It decodes, and the result is goo
 
 - it has only ever been tested on **EC11**, on prints we had to hand. Other revisions of the codec
   exist and are not handled;
-- the **surround channels are not right yet** (see `docs/STATUS.md`);
 - a few values are **measured rather than derived from the format**, in particular the per-band gain of
   the coupled bands;
 - it still needs tables from a firmware dump, and **removing that dependency is active work**. Part of
