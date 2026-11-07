@@ -22,7 +22,7 @@ Work in progress. This file is the honest version of the README.
 - **Surround channels.** Right level, roughly the right spectral shape, wrong waveform. Ruled out:
   - *steering*: the five flags are inactive on all 790 blocks examined;
   - *coupling master exponents*: 3 on every channel in 98% of blocks, so a constant;
-  - *a fixed delay*: about 1100 samples improves the match but does not reproduce cleanly, which is why
+  - *a fixed delay*: about 1100 samples 
     `--surround-delay` exists and defaults to off.
 
 ## Scope
