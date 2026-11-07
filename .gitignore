@@ -1,0 +1,15 @@
+# Dolby firmware data: never commit. Regenerate with tools/extract_tables.py from your own dump.
+tables.npz
+*.bin
+*.BIN
+
+# Audio and film material
+*.wav
+*.npy
+*.npz
+*.srd
+*.aue
+
+__pycache__/
+*.pyc
+.DS_Store
