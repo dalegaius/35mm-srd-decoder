@@ -25,7 +25,7 @@ The bitstream itself is read exactly: on a test reel, 99.3% of audio blocks are 
 16 bits of their last data bit, median +1 bit. Per-band normalisation checks out (the largest value in
 each coded band is at or above 0.5, median 1.000).
 
-Front channels and LFE sound right and measure right. Surrounds do not yet.
+
 
 ## You need a dump of your own hardware
 
