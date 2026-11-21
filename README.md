@@ -1,48 +1,22 @@
 # 35mm-srd-decoder
 
 An open decoder for **Dolby SR-D**, the 5.1 digital soundtrack printed between the perforations of
-35 mm release prints. It goes from photographs of the film to 5.1 audio, with no Dolby hardware in the
-playback path.
+35 mm release prints. It goes from photographs or scans of the film to 5.1 audio, with no Dolby hardware
+in the playback path.
+
+Both codec revisions found on film are decoded:
+
+| | Revision 9 ("EC9") | Revision 11 ("EC11") |
+|---|---|---|
+| Needs data from a hardware dump | **no** | yes, the mantissa codebooks only |
+| Checked against an independent reference | not yet | yes, the DTS disc of the same reel |
+| Tested on | a 1999 trailer, a 2007 cinema ad, rating cards, a Dolby leader | a 2005 feature reel, a 2006 trailer |
 
 ## Work in progress
 
-This is research code, not a finished product. It decodes, and the result is good, but:
-
-- it has only ever been tested on **EC11**, on prints we had to hand. Other revisions of the codec
-  exist and are not handled;
-- a few values are **measured rather than derived from the format**, in particular the per-band gain of
-  the coupled bands;
-- it still needs tables from a firmware dump, and **removing that dependency is active work**. Part of
-  it is done already: the frame byte order, which used to require a third-party table, is now derived
-  from the error-correcting code itself.
-
-Expect rough edges, and please report what breaks.
-
-## Where it stands
-
-The bitstream itself is read exactly: on a test reel, 99.3% of audio blocks are consumed to within
-16 bits of their last data bit, median +1 bit. Per-band normalisation checks out (the largest value in
-each coded band is at or above 0.5, median 1.000).
-
-
-
-## You need a dump of your own hardware
-
-This repository contains **no Dolby firmware and no tables extracted from it**. The decoder needs a few
-(Reed-Solomon interleaves, the quantizer dispatch, step sizes, 36 Huffman codebooks), and you generate
-them once from a dump of hardware you own:
-
-```
-python tools/extract_tables.py your_84147_dump.bin
-```
-
-The dump is the 128 KB flash marked **84147** on a Dolby **Cat. No. 673A** card, firmware 3.00. The
-script checks what it reads and tells you if the addresses do not fit your version. The file it writes,
-`tables.npz`, stays on your machine and is in `.gitignore`.
-
-Read `NOTICE.md` for why the project is built this way. The long-term aim is to need no dump at all:
-most of what the decoder uses is already formulas or derivable from the film, and the 36 Huffman
-codebooks are the real remaining obstacle.
+This is research code, not a finished product. It decodes, and the result is good, but read
+`docs/STATUS.md` before relying on it: it says what is established, what is measured, and what is still
+assumed. Expect rough edges, and please report what breaks.
 
 ## Install
 
@@ -50,58 +24,102 @@ codebooks are the real remaining obstacle.
 pip install -r requirements.txt
 ```
 
+Python 3.9 or later.
+
 ## Use
 
-```
-python srd_decode.py path/to/photos -o myreel
-```
+### The window
 
-Or double-click `Decode SR-D (Windows).bat` or `Decode SR-D (Mac).command` for a window that asks for a
-folder.
+Double-click `Decode SR-D (Windows).bat` or `Decode SR-D (Mac).command`, choose a folder. What happens
+depends on what the folder holds:
 
-Writes `myreel_5.1.wav` (L R C LFE Ls Rs), `myreel_stereo.wav` and `myreel_centre.wav`, 48 kHz.
-Inputs can be a folder of photographs (JPEG, PNG, TIFF or camera RAW), 722-byte grid files such as the
-`output.bin` of davidferguson/dolby-srd's srd-recognize, or `.npy` arrays of shape (n, 19, 38).
-
-Options:
-
-| Option | Effect |
+| Folder contents | What runs |
 |---|---|
-| `--no-ser` | disable the noise reconstruction of quantization error |
-| `--max-gap N` | conceal up to N missing blocks by repeating the previous one |
-| `--surround-delay N` | delay the surrounds by N samples; try 1100. Off by default, see below |
+| Camera RAW photos (`.dng`) | `srd_prepare.py`, then `srd_photos.py`: the path that recovers the most blocks |
+| `points.npz` and `rapport.csv` from an earlier run | `srd_photos.py` only |
+| Other images (JPEG, PNG, TIFF), or `.npz` block files from the video extractor | `srd_decode.py` |
+
+The result goes to a `srd_decoded` folder inside the one you chose: `name_5.1.wav` (L R C LFE Ls Rs),
+`name_stereo.wav`, `name_centre.wav`, 48 kHz 16 bit. The window shows the current step, the elapsed time
+and an estimate of the time left.
+
+### The command line
+
+```
+python srd_decode.py path/to/images -o myreel            # images, grid files, .npz block files
+python srd_prepare.py photos_dng -o work --no-crops      # RAW photos: read every block once
+python srd_photos.py work -o work/myreel                 # correct, combine the reads, decode
+python srd_extract_video.py scan.mkv -o blocks.npz       # film scans delivered as video
+```
+
+`srd_decode.py` also reads 722-byte grid files such as the `output.bin` of davidferguson/dolby-srd's
+srd-recognize, and `.npy` arrays of shape (n, 19, 38).
+
+| Option of `srd_decode.py` | Effect |
+|---|---|
+| `--workers N` | read images in parallel |
+| `--level loud` / `peak` | output level: average at -20 dBFS (default), or highest sample at 0.89 |
+| `--max-gap N` | conceal up to N missing blocks in a row by repeating the previous one (default 8) |
+| `--no-ser` | EC11: disable the noise reconstruction of quantization error |
+| `--surround-delay N` | delay the surrounds by N samples; off by default |
 | `--restore` | soften codec artifacts; does not recover lost information |
-| `--workers N` | read photographs in parallel |
+
+`srd_photos.py` is the better tool when a block appears in several photographs: a block that fails in
+every photograph is retried by **adding its reads together** before thresholding, which often turns two
+poor reads into a good one. It also writes `name_manquants.csv`, the blocks still missing and the
+photographs they appear in, so that you know what to shoot again.
 
 ### Photographing the blocks
 
-The block finder locates and orients blocks on its own, including mirrored film. Aim for at least
-5 pixels per dot, keep a third of overlap between consecutive frames, and focus on the blocks
-themselves. Blocks seen in several photographs are merged.
+- At least 3.5 pixels per dot; 5 is comfortable.
+- Each block should appear in **two** photographs. With six blocks per photograph, advance three blocks
+  between shots.
+- Blocks in the middle of the frame read at 94 to 99%, blocks at the edges often below 15%: what matters
+  is that every block is near the middle of at least one photograph.
+- Even, diffuse backlight, the camera parallel to the film, focus on the blocks.
+- The block finder locates and orients blocks on its own, including mirrored film.
+
+Film scans published as compressed video are a harder source: below about 98.5% of dots read correctly,
+almost no block survives the error correction. `srd_extract_video.py` handles the good ones.
+
+## The EC11 codebooks
+
+Revision 11 codes its mantissas with 36 prefix codes that Dolby chose from statistics. They follow no
+rule, so this repository cannot contain them as a formula, and it does not contain them as data. You
+generate them once, from a dump of hardware you own:
+
+```
+python tools/extract_tables.py your_dump.bin
+```
+
+The dump is the 128 KB flash marked **84147** on a Dolby **Cat. No. 673A** card, firmware 3.00. The tool
+checks what it reads and writes `codebooks.npz`, a plain file (code lengths and code values, format in
+`srd/codebooks.py`) that stays on your machine and is in `.gitignore`. A `tables.npz` made by an earlier
+version of this repository can be converted with the same command.
+
+Everything else is rules written in this repository. **A revision 9 print needs no dump at all.**
+Read `NOTICE.md` for why the project is built this way.
 
 ## How it works
 
+`docs/FORMAT.md` describes the format in full. In short:
+
 | Stage | Detail |
 |---|---|
-| Grid | 76 x 76 fixels, 2 x 4 fixels per byte, 722 bytes per block |
-| Outer code | RS(87,67) x 8 over GF(256), poly 0x187, fcr 120 |
-| Inner code | RS(177,157) x 3. **Frame word w is the message symbols of inner codeword w mod 3**, taken in pairs: bytes (sym[j][2p+o], sym[j][2p+1+o]) with p = w // 3 and o = (0, 0, 1). This is why no third-party offset table is needed. |
-| De-whitening | word w XOR (0xD944 + w * 0x2777) mod 65536, from frame word 21 |
-| Header | word 0 = mode, word 1 = 0x0B40: block type SRD, EC revision 11, coupling mode 2 (first coupled band 14) |
-| Exponents | 7 sets, 4-bit start plus VLC deltas; 5 channels x 14 bands, 6 shared coupled bands, 6 LFE bands |
-| Allocation | a = Xmax - X + B[band] (+4 coupled) + (f6 - 32); floor 8 if positive; clip 0-36; cap 4(20 - X) |
-| Quantizer | by allocation: none, 3-level pairs, Huffman (5 to 63 levels, per band group), or plain 7 to 9 bits |
-| Coupling | sqrt((m + 16) / 32 * 2^-e) per channel and coupled band, times a per-band gain of 2.4, 3.6, 6.2, 8.9, 9.9, 11.1 dB (measured, not derived) |
+| Grid | 76 x 76 dots, 2 x 4 dots per byte, 722 bytes per block, 4 blocks per film frame |
+| Error correction | outer RS(87,67) x 8 and inner RS(177,157) x 3 over GF(256), poly 0x187, first root 120. Symbol positions are generated from rules (`srd/layout.py`). A block is accepted only if all 11 codewords agree on the final grid |
+| Frame | 16-bit words from the message symbols of the three inner codewords, de-whitened: word w XOR (0xD944 + w x 0x2777) mod 65536 |
+| Header | word 0 = mode (0x0000, 0x4000 and 0x8000 seen), word 1 high byte = revision (9 or 11) |
+| Audio | 3,440 bits per block for six channels, 512 samples at 48 kHz, stream order L, R, Ls, Rs, C, LFE |
 | Synthesis | **evenly stacked TDAC**: half-block 0 cos(2 pi / N (n + 128) k), half-block 1 sin(...), N = 512, hop 256, **KBD window alpha 4** |
-| Channels | stream order L, R, Ls, Rs, C, LFE |
+| Coupling | above 3 kHz (EC9) or 4.7 kHz (EC11) the channels share one composite signal, which only gives the shape of each band; every channel has its own absolute level per band |
 
-Two points cost the most to find and are worth stating plainly. The transform is **evenly stacked**,
-not the odd stacking of AC-3: using the wrong one shifts every frequency by 47 Hz and makes speech
-sound metallic. And the window is **KBD alpha 4**, which matches the window table Dolby broadcasts on
-the film itself in module E3 to within half a least-significant bit.
+Two points cost the most to find and are worth stating plainly. The transform is **evenly stacked**, not
+the odd stacking of AC-3: using the wrong one shifts every frequency by 47 Hz and makes speech sound
+metallic. And the window is **KBD alpha 4**.
 
-The format is described in **US patent 5,583,962** (Dolby Laboratories, 1992), now expired.
-
+The format is described in **US patent 5,583,962** (Dolby Laboratories, filed 1991), now expired. Revision
+9 follows it closely.
 
 ## Credits
 

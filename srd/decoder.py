@@ -1,52 +1,40 @@
-"""EC11 mantissa decoding (allocation + quantizer) and audio synthesis.
+"""EC11 (SR-D revision 11): mantissa decoding (allocation and quantizers), coupling, and audio synthesis.
 
-Allocation rule and field order: read from the ZR38000 code by Mike (see README).
-Synthesis: evenly-stacked TDAC (Princen-Bradley), as described in US 5,583,962:
-half-block 0 = modified DCT, half-block 1 = modified DST, N = 512, hop 256, KBD window alpha 4.
+Synthesis: evenly stacked TDAC (Princen-Bradley), as described in US patent 5,583,962: half-block 0 is a modified
+DCT, half-block 1 a modified DST, N = 512, hop 256, KBD window alpha 4.
 """
 import numpy as np
 from .ec11_parse import parse
-from .tables import H
+from . import codebooks
 
 WIDTHS = [1, 1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 10, 13, 16, 20, 26, 36, 56]   # coefficients per band (217)
 START = np.cumsum([0] + WIDTHS)[:-1]
-BTAB = [20, 20, 20, 20, 20, 20, 17, 16, 16, 16, 16, 16, 13, 12, 12, 12, 12, 9, 2, 0]
+BTAB = [20, 20, 20, 20, 20, 20, 17, 16, 16, 16, 16, 16, 13, 12, 12, 12, 12, 9, 2, 0]   # base allocation per band
 N, M = 512, 256
 
-def _s20(v):
-    v &= 0xFFFFF; return (v - (1 << 20) if v & 0x80000 else v) / (1 << 19)
-def _s12(v):
-    v &= 0xFFF; return (v - 4096 if v & 0x800 else v) / 2048
 
-_TRI = _BOOK = _B3 = _STEP = None
-def _init():
-    global _TRI, _BOOK, _B3, _STEP
-    if _TRI is not None: return
-    _TRI = []
-    for a in range(37):
-        p = H(0x2B2F + a) & 0xFFFF
-        _TRI.append((H(p) & 0xFFFFF, H(p + 1) & 0xFFFFF, H(p + 2) & 0xFFFF))
-    _STEP = [(H(0x2B54 + a) & 0xFFFFF) / 2.0 ** 18 for a in range(37)]
-    _BOOK, _B3 = {}, {}
+def quantizer(a):
+    """allocation index 0..36 -> ('zero',) | ('pair3',) | ('huff', levels) | ('raw', bits)"""
+    if a <= 3: return ('zero',)
+    if a <= 8: return ('pair3',)
+    if a <= 11: return ('huff', 5)
+    if a <= 13: return ('huff', 7)
+    if a <= 18: return ('huff', 15)
+    if a <= 22: return ('huff', 31)
+    if a <= 26: return ('huff', 63)
+    if a <= 30: return ('raw', 7)
+    if a <= 34: return ('raw', 8)
+    return ('raw', 9)
 
-def _book(band, prm):
-    p = H((H(0x2AFD + band) & 0xFFFF) + prm) & 0xFFFF
-    if p not in _BOOK:
-        P = H(p) & 0xFFFFF; ent = [H(p + 2 + k) & 0xFFFFF for k in range(1 << P)]
-        vals, lens, k = [], [], 0
-        while k < len(ent):
-            run = 1
-            while run * 2 <= len(ent) - k and k % (run * 2) == 0 and all(e == ent[k] for e in ent[k:k + run * 2]):
-                run *= 2
-            vals += [_s20(ent[k])] * run; lens += [P - int(np.log2(run))] * run; k += run
-        _BOOK[p] = (P, vals, lens)
-    return _BOOK[p]
 
-def _book3(band):
-    p = H(H(0x2AFD + band) & 0xFFFF) & 0xFFFF
-    if p not in _B3:
-        _B3[p] = [(_s12(H(p + k) >> 20), _s12(H(p + k) >> 8), H(p + k) & 0xFF) for k in range(16)]
-    return _B3[p]
+def step(a):
+    """quantizer step for this allocation index: one over the number of levels"""
+    q = quantizer(a)
+    return 1.0 if q[0] == 'zero' else 1 / 3 if q[0] == 'pair3' else 1 / q[1] if q[0] == 'huff' else 1 / (1 << q[1])
+
+
+def _init():          # kept for callers of the former interface
+    pass
 
 def _peek(bits, p, n):
     v = 0
@@ -79,36 +67,26 @@ def decode_mantissas(bits, r, rng=None, ser=True):
             for _ in range(1 if b == 0 else 2):
                 v = _peek(bits, p, 9); vals.append((v - 512 if v >= 256 else v) / 256); p += 9
         else:
-            a = alloc_index(r, b, x); D7, I3, h = _TRI[a]
+            a = alloc_index(r, b, x); q = quantizer(a)
             for _ in range(WIDTHS[b]):
-                if h == 0x355D:
+                if q[0] == 'zero':
                     vals += [0.0, 0.0]
-                elif h == 0x358F:
+                elif q[0] == 'raw':
+                    nb = q[1]
                     for _ in range(2):
-                        v = _peek(bits, p, D7); vals.append((v - (1 << D7) if v >= 1 << (D7 - 1) else v) / (1 << (D7 - 1))); p += D7
-                elif h == 0x3535:
-                    P, vv, ll = _book(b, I3)
+                        v = _peek(bits, p, nb); vals.append((v - (1 << nb) if v >= 1 << (nb - 1) else v) / (1 << (nb - 1))); p += nb
+                elif q[0] == 'huff':
+                    P, vv, ll = codebooks.huffman(b, q[1])
                     for _ in range(2):
                         c = _peek(bits, p, P); vals.append(vv[c]); p += ll[c]
-                else:  # $3569: two 3-level values per code
-                    v0, v1, L = _book3(b)[_peek(bits, p, 4)]; vals += [v0, v1]; p += L
-            if SHRINK and h in (0x3535, 0x3569, 0x358F):
-                T = _STEP[a]; vals = [_shrink(v, T) for v in vals]
+                else:                                    # two three-level values in one code
+                    P, vv, ll = codebooks.pairs(b); c = _peek(bits, p, 4); vals += list(vv[c]); p += ll[c]
+            if SHRINK and q[0] != 'zero':
+                T = step(a); vals = [_shrink(v, T) for v in vals]
             if ser and rng is not None and x < 20:       # statistically enhanced reconstruction
-                T = _STEP[a]; vals = [v + rng.uniform(-T, T) for v in vals]
+                T = step(a); vals = [v + rng.uniform(-T, T) for v in vals]
         out.append((g, b, vals))
     return out, p
-
-# Per-band gain of the coupled bands, measured against the DTS soundtrack of the same print
-# (same mix, same reel, serial 65414). Below 4.7 kHz the decoder already matches DTS to 0.1 dB;
-# these figures correct the only remaining deficit, which grows with frequency.
-CPL_EQ_DB = [2.4, 3.6, 6.2, 8.9, 9.9, 11.1]     # bands 14 to 19
-COUPLING_EQ = True
-
-
-def coupling_coord(e, m, j):
-    g = 10 ** (CPL_EQ_DB[j] / 20) if COUPLING_EQ else 1.0
-    return np.sqrt((m + 16) / 32 * 2.0 ** (-e)) * g
 
 def validate(bits, r=None):
     """Strict check for frames recovered with erasures: in-range exponents and a parse that ends at
@@ -135,14 +113,25 @@ def spectra(bits, rng=None, ser=True):
             v0, v1 = vals[2 * i] * sc, vals[2 * i + 1] * sc
             if b >= 14: comp[c0 + i] = (v0, v1)
             else: sp[g, 0, c0 + i] = v0; sp[g, 1, c0 + i] = v1
-    for ch in range(5):                                   # coupling (bands 14-19, above ~4.7 kHz)
-        for j in range(6):
-            e, m = r['r1'][ch * 6 + j], r['r2'][ch * 6 + j]
-            cf = coupling_coord(e, m, j); b = 14 + j
-            for i in range(WIDTHS[b]):
-                k = START[b] + i
-                if k in comp: sp[ch, 0, k] = comp[k][0] * cf; sp[ch, 1, k] = comp[k][1] * cf
+    # Coupling (bands 14-19, above about 4.7 kHz). The composite only gives the SHAPE of each band: it is brought to
+    # unit RMS over the band (both half-blocks). Each channel then has its own ABSOLUTE level per band,
+    # (m + 16) / 32 * 2^-E with E = e + 3 * c2[channel]: e and m are the channel's 4-bit exponent and mantissa for
+    # the band, c2 its 2-bit field. At the last exponent (E = 24) the mantissa has no implicit leading one, so
+    # that a level of exactly zero can be sent. Checked against the DTS soundtrack of the same reel: band levels
+    # agree within a few tenths of a dB on average, 1.3 dB rms per block.
+    for j in range(6):
+        b = 14 + j; ks = [START[b] + i for i in range(WIDTHS[b]) if START[b] + i in comp]
+        if not ks: continue
+        c = np.array([comp[k] for k in ks]) / (2.0 ** (-r['exps'][6][j]))           # mantissas, exponent removed
+        rms = np.sqrt(np.mean(c ** 2))
+        if rms == 0: continue
+        shape = c / rms
+        for ch in range(5):
+            e, m = r['r1'][ch * 6 + j], r['r2'][ch * 6 + j]; E = e + 3 * r['c2'][ch]
+            lvl = (m + 16) / 32 * 2.0 ** (-E) if E < 24 else m / 32 * 2.0 ** (-E)
+            for (v0, v1), k in zip(shape, ks): sp[ch, 0, k] = v0 * lvl; sp[ch, 1, k] = v1 * lvl
     return sp
+
 
 _n, _k = np.arange(N), np.arange(M)
 KC = np.cos(2 * np.pi / N * np.outer(_n + 128, _k))

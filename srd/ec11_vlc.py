@@ -1,12 +1,10 @@
-#!/usr/bin/env python3
-"""
-EC11 exponent VLC from the ZR38000 table H:$25EB (fredrun 3.1.12, flash 0xE07F record).
+"""EC11 exponent coding: a 4-bit first exponent, then one variable-length difference per following band.
 
-The 64-entry table is indexed by the next 6 bits; entries form a complete prefix code:
+The differences use a fixed prefix code, the same on every print:
   00 -> 0 | 010 -> +1 | 0110 -> -1 | 0111 -> +2 | 1000 -> -2 | 10010 -> +3 | 10011 -> -3
-  101000..111111 (6 bits) -> table values (4,8,6,5,7,10,9,15,14,13,12,11,-4..-15)
+  then 6-bit codes 101000 to 111111 for +4, +8, +6, +5, +7, +10, +9, +15, +14, +13, +12, +11, -4 ... -15
+It is stored here as a 64-entry table indexed by the next 6 bits (value, and number of bits used).
 """
-import numpy as np
 
 T = [0] * 16 + [1] * 8 + [-1] * 4 + [2] * 4 + [-2] * 4 + [3, 3, -3, -3] + \
     [4, 8, 6, 5, 7, 10, 9, 15, 14, 13, 12, 11] + list(range(-4, -16, -1))
@@ -22,7 +20,7 @@ def peek6(bits, p):
 
 
 def decode_channel(bits, p, n, first_bits=4):
-    """4-bit absolute exponent then n VLC deltas. Returns (exponents, end position)."""
+    """first exponent on 4 bits, then n coded differences. Returns (exponents, end position)."""
     e = 0
     for k in range(first_bits):
         e = e * 2 + int(bits[p + k])
