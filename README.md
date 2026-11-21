@@ -35,7 +35,7 @@ depends on what the folder holds:
 
 | Folder contents | What runs |
 |---|---|
-| Camera RAW photos (`.dng`) | `srd_prepare.py`, then `srd_photos.py`: the path that recovers the most blocks |
+| Camera RAW/ images | `srd_prepare.py`, then `srd_photos.py`: the path that recovers the most blocks |
 | `points.npz` and `rapport.csv` from an earlier run | `srd_photos.py` only |
 | Other images (JPEG, PNG, TIFF), or `.npz` block files from the video extractor | `srd_decode.py` |
 
